@@ -1,0 +1,18 @@
+name: Build Easy Cast
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - name: Create TLS certificate
+        run: keytool -genkeypair -storetype PKCS12 -keyalg RSA -keysize 2048 -validity 9000 -alias ec -keystore app/src/main/assets/ec.p12 -storepass easycast -keypass easycast -dname "CN=Easy Cast"
+      - uses: gradle/actions/setup-gradle@v3
+        with: { gradle-version: 8.7 }
+      - run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EasyCast-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
