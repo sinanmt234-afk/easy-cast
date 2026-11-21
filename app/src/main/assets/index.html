@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Easy Cast</title>
+<style>
+:root{--gold:#d4af37;--ivory:#ede6d6;--mut:#8c8570}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;color:var(--ivory);
+font-family:Georgia,'Times New Roman',serif;background:radial-gradient(circle at 50% 0%,#2a2009,#000 70%);padding:24px}
+.wrap{max-width:760px;width:100%;text-align:center}
+h1{font-weight:300;letter-spacing:.35em;color:var(--gold);font-size:clamp(28px,6vw,48px);margin:0 0 8px}
+.line{width:90px;height:1px;background:var(--gold);margin:16px auto}
+p.sub{letter-spacing:.12em;color:var(--mut);margin:0 0 36px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px}
+.card{border:1px solid rgba(212,175,55,.45);border-radius:18px;padding:28px 22px;background:rgba(255,255,255,.03);
+backdrop-filter:blur(8px);cursor:pointer;transition:.25s;display:block;color:inherit}
+.card:hover{border-color:var(--gold);transform:translateY(-3px);box-shadow:0 10px 40px rgba(212,175,55,.15)}
+.card h2{margin:0 0 8px;font-weight:400;letter-spacing:.1em;color:var(--gold);font-size:22px}
+.card span{color:var(--mut);font-size:14px;line-height:1.5}
+#live{display:none}
+.btn{margin-top:24px;border:1px solid var(--gold);background:none;color:var(--gold);padding:12px 36px;border-radius:50px;
+font-family:inherit;letter-spacing:.2em;cursor:pointer;font-size:15px}
+.btn:hover{background:var(--gold);color:#000}
+#status{margin-top:22px;color:var(--mut);min-height:22px}
+video{max-width:100%;max-height:220px;border-radius:12px;margin-top:18px;border:1px solid rgba(212,175,55,.3)}
+input[type=file]{display:none}
+</style></head><body>
+<div class="wrap">
+<h1>EASY CAST</h1><div class="line"></div>
+<p class="sub">Cast to your TV in full quality</p>
+<div id="pick" class="cards">
+ <div class="card" id="mirror"><h2>Mirror Screen</h2><span>Show your whole screen or a window on the TV, with sound.<br>Best on Windows and Mac.</span></div>
+ <label class="card"><h2>Cast Video</h2><span>Choose a video and play it on the TV.<br>Control it with your TV remote.</span>
+ <input type="file" id="file" accept="video/*"></label>
+</div>
+<div id="live"><h2 style="color:var(--gold);font-weight:300;letter-spacing:.2em" id="liveTitle">Casting</h2>
+<video id="vid" playsinline controls></video><br>
+<button class="btn" id="stop">STOP CASTING</button></div>
+<div id="status"></div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+let ws,pc,ch,stream,mode,ac,dst,vid=$('vid');
+const status=t=>$('status').textContent=t;
+const show=live=>{$('pick').style.display=live?'none':'grid';$('live').style.display=live?'block':'none'};
+
+function openWs(){return new Promise((res,rej)=>{
+ if(ws&&ws.readyState===1)return res();
+ ws=new WebSocket('wss://'+location.host+'/ws');
+ ws.onopen=res; ws.onerror=()=>rej(new Error('Cannot reach the TV'));
+ ws.onmessage=async e=>{const m=JSON.parse(e.data);
+  if(m.type==='answer'){await pc.setRemoteDescription({type:'answer',sdp:m.sdp});boost();status('Connected')}
+  else if(m.type==='ice'&&pc){pc.addIceCandidate({candidate:m.candidate,sdpMid:m.sdpMid,sdpMLineIndex:m.sdpMLineIndex})}
+  else if(m.type==='bye')stop(false)};
+ ws.onclose=()=>stop(false)})}
+
+function boost(){pc.getSenders().forEach(s=>{if(s.track&&s.track.kind==='video'){
+ const p=s.getParameters();if(!p.encodings||!p.encodings.length)p.encodings=[{}];
+ p.encodings[0].maxBitrate=30e6;p.degradationPreference='maintain-resolution';s.setParameters(p).catch(()=>{})}})}
+
+async function go(m,st){
+ mode=m;stream=st;await openWs();
+ pc=new RTCPeerConnection({iceServers:[]});
+ ch=pc.createDataChannel('ctrl');
+ ch.onmessage=e=>{if(mode!=='video')return;const c=JSON.parse(e.data);
+  if(c.cmd==='toggle')vid.paused?vid.play():vid.pause();
+  if(c.cmd==='seek')vid.currentTime=Math.max(0,vid.currentTime+c.delta)};
+ st.getTracks().forEach(t=>{pc.addTrack(t,st);
+  if(t.kind==='video'){t.contentHint=m==='video'?'motion':'detail';t.onended=()=>stop(true)}});
+ try{const caps=RTCRtpSender.getCapabilities('video').codecs;
+  const h=caps.filter(c=>c.mimeType==='video/H264'),o=caps.filter(c=>c.mimeType!=='video/H264');
+  pc.getTransceivers().forEach(t=>{if(t.sender.track&&t.sender.track.kind==='video')t.setCodecPreferences([...h,...o])})}catch(e){}
+ pc.onicecandidate=e=>{if(e.candidate)ws.send(JSON.stringify({type:'ice',candidate:e.candidate.candidate,sdpMid:e.candidate.sdpMid,sdpMLineIndex:e.candidate.sdpMLineIndex}))};
+ ws.send(JSON.stringify({type:'mode',mode:m}));
+ const off=await pc.createOffer();await pc.setLocalDescription(off);
+ ws.send(JSON.stringify({type:'offer',sdp:off.sdp}));
+ $('liveTitle').textContent=m==='video'?'Casting video':'Mirroring screen';
+ show(true);status('Connecting…')}
+
+function stop(notify){
+ if(notify&&ws&&ws.readyState===1)ws.send(JSON.stringify({type:'bye'}));
+ if(mode==='mirror'&&stream)stream.getTracks().forEach(t=>t.stop());
+ if(vid&&mode==='video')vid.pause();
+ try{pc&&pc.close()}catch(e){} pc=null;mode=null;show(false);status('')}
+
+$('stop').onclick=()=>stop(true);
+
+$('mirror').onclick=async()=>{
+ try{
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getDisplayMedia)return status('Screen mirroring needs a computer browser (Chrome, Edge or Safari). On a phone, use Cast Video.');
+  const st=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:60},width:{ideal:3840},height:{ideal:2160}},audio:true});
+  await go('mirror',st)}catch(e){status(e.message||'Cancelled')}};
+
+$('file').onchange=async e=>{
+ const f=e.target.files[0];if(!f)return;
+ try{
+  vid.src=URL.createObjectURL(f);
+  if(!ac){ac=new AudioContext();dst=ac.createMediaStreamDestination();ac.createMediaElementSource(vid).connect(dst)}
+  await ac.resume();await vid.play();
+  const vs=vid.captureStream?vid.captureStream():vid.mozCaptureStream();
+  await go('video',new MediaStream([...vs.getVideoTracks(),...dst.stream.getAudioTracks()]))
+ }catch(err){status(err.message||'Could not start')}};
+</script></body></html>
